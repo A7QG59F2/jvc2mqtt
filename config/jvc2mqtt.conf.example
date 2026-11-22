@@ -15,6 +15,9 @@
 JVC_MAC=""
 # RFCOMM channel of the JVC Remote (SPP) service. Found with jvc-probe.py scan/listen.
 JVC_CHANNEL="16"
+# Bluetooth adapter that talks to the radio (ls /sys/class/bluetooth). Any Linux
+# box with Bluetooth in range of the radio works; it doesn't have to be an Odroid.
+BT_ADAPTER="hci0"
 
 # ─── Radio audio (Music Assistant player through the radio) ─────────────────
 # Squeezelite → BlueALSA → Bluetooth (A2DP) → the radio. Music Assistant finds
@@ -27,12 +30,40 @@ RADIO_AUDIO_NAME="Car-Radio"
 RADIO_AUDIO_SERVER=""
 # How often to try reconnecting the radio's audio while it's off (seconds)
 RADIO_RECONNECT_SECONDS="15"
+# Squeezelite buffers, for skips at the start of playback. SQUEEZELITE_BUFFER
+# is -b <stream KB>:<output KB> (Squeezelite's default 2048:3446);
+# SQUEEZELITE_ALSA is -a <buffer ms>:<periods> for the BlueALSA output
+# (Squeezelite's default 40:4). Empty = Squeezelite's default.
+SQUEEZELITE_BUFFER="4096:8192"
+SQUEEZELITE_ALSA="200:4"
+# Squeezelite's player MAC, which is also Music Assistant's player ID. Pin it
+# (e.g. "70:f1:1c:18:57:7c") so the player keeps its ID and settings if the
+# radio moves to another host. Empty = this host's network address.
+SQUEEZELITE_MAC=""
 # The radio's display (play state, track) and its play/pause/next/previous
 # buttons follow this Home Assistant media_player. Needs a long-lived access
 # token, which --configure asks for and keeps in /etc/jvc2mqtt/ha-token
 # (never in this file). Empty = media_player.<RADIO_AUDIO_NAME, lowercased,
 # dashes as underscores>, e.g. media_player.car_radio.
 RADIO_HA_ENTITY=""
+
+# ─── jvc2mqtt bridge (radio settings as Home Assistant entities, MQTT) ──────
+# Holds the radio's remote link, so the JVC Remote phone app can't connect
+# while it runs; switch.<RADIO_ENTITY_PREFIX>_remote_link off lets the app in.
+ENABLE_BRIDGE="0"
+# MQTT broker (the Mosquitto app on Home Assistant). Empty = homeassistant.local
+MQTT_HOST=""
+MQTT_PORT="1883"
+# The password is asked by --configure and kept in /etc/jvc2mqtt/mqtt-password
+# (mode 600), never in this file.
+MQTT_USER=""
+# Entity IDs are <domain>.<RADIO_ENTITY_PREFIX>_<setting>, e.g. number.car_radio_volume
+RADIO_ENTITY_PREFIX="car_radio"
+# Highest volume Home Assistant may set (the knob on the radio still goes higher)
+VOLUME_LIMIT="25"
+# Topic prefixes
+MQTT_PREFIX="jvc2mqtt"
+HA_DISCOVERY_PREFIX="homeassistant"
 
 # ─── Home Assistant ─────────────────────────────────────────────────────────
 # Home Assistant's address for the API, e.g. "http://192.168.1.3:8123".
