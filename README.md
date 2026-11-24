@@ -1,9 +1,14 @@
 # jvc2mqtt – JVC KD-SX38MBT car receiver ↔ Home Assistant
 
 Control a **JVC KD-SX38MBT** car receiver from Home Assistant, and play Music Assistant through it,
-over the receiver's Bluetooth. It runs on a small Linux computer with Bluetooth; here that's an
-Odroid C2 with a TP-Link UB500 dongle, set up by
-[ODroid-C2-bluetooth-proxy](https://github.com/A7QG59F2/ODroid-C2-bluetooth-proxy).
+over the receiver's Bluetooth. It runs on **any Linux box with Bluetooth in range of the radio**
+(Debian, DietPi, Raspberry Pi OS); the adapter is a setting (`BT_ADAPTER`). The first host is an
+Odroid C2 with a TP-Link UB500 dongle, whose board setup lives in
+[ODroid-C2-bluetooth-proxy](https://github.com/A7QG59F2/ODroid-C2-bluetooth-proxy); nothing here
+depends on it.
+
+The radio accepts **one remote at a time**: while the bridge holds the link, the JVC Remote phone
+app can't connect (turn `switch.car_radio_remote_link` off to let it in).
 
 | Part | Status |
 |---|---|
@@ -11,11 +16,11 @@ Odroid C2 with a TP-Link UB500 dongle, set up by
 | **`jvc-probe`**: pair, scan, listen, and talk to the radio | Works (`talk` answers the hello, ACKs, sets the clock, sends commands) |
 | **Radio audio**: Music Assistant player through the radio (Squeezelite → BlueALSA → A2DP) | Works |
 | **Track display + buttons** (AVRCP player mirroring HA's `media_player`) | Being tested |
-| **`jvc2mqtt` bridge**: radio as HA entities over MQTT | To do |
+| **`jvc2mqtt` bridge**: radio as HA entities over MQTT | Written, tested against a simulated radio; live test next |
 
 ## Install
 
-On the computer that will talk to the radio (Debian/DietPi, Bluetooth adapter on `hci0`):
+On the computer that will talk to the radio (Debian/DietPi/Raspberry Pi OS with a Bluetooth adapter):
 
 ```bash
 apt-get update && apt-get install -y git
@@ -31,9 +36,12 @@ Play Music Assistant through the radio over Bluetooth? [Y/n]
   Player name in Music Assistant (no spaces) [Car-Radio]
   Home Assistant address (empty = http://homeassistant.local:8123) []
   ...Home Assistant long-lived access token
+Run the jvc2mqtt bridge (radio settings as Home Assistant entities over MQTT)? [y/N]
+  MQTT broker (empty = homeassistant.local) []
+  MQTT user / password
 ```
 
-On the Odroid, turn on **Bluetooth** (the UB500) in `odroid-ha-install --configure` first, and leave the
+On an Odroid, turn on **Bluetooth** (the UB500) in `odroid-ha-install --configure` first, and leave the
 **Bluetooth proxy off**: its constant BLE scanning stops the dongle from opening a connection to the
 radio ("Host is down"). A link that's already open survives scanning.
 
@@ -50,8 +58,11 @@ jvc2mqtt-install                  # pull the latest version and re-apply
 the HA token into `/etc/jvc2mqtt/`, removes them from `/etc/odroid-ha/odroid-ha.conf`, and replaces the
 `odroid-ha-radio-*` services with `jvc2mqtt-radio-*`.
 
-**The radio's clock** is set from this computer's local time on every connect, so the time zone must
-be right (`timedatectl`; on the Odroid, `TIMEZONE` in its config).
+**The radio's clock** is set from this computer's local time on every connect (and hourly by the
+bridge), so the time zone must be right (`timedatectl`; on the Odroid, `TIMEZONE` in its config).
+
+**Moving to another host:** install there, pair the radio with it, and set `SQUEEZELITE_MAC` to the
+old player ID (`jvc2mqtt-check` shows it) so Music Assistant keeps the same player.
 
 ## 1. Pair the computer with the radio
 
@@ -123,7 +134,16 @@ is connected, and HA gets `media_player.car_radio`.
 
 With a Home Assistant token, `jvc2mqtt-radio-avrcp` also registers a Bluetooth media player, so the
 radio's display shows the play state and track, and its play/pause/next/previous buttons control the
-HA `media_player`. Without a token the radio shows STOP.
+HA `media_player`. Without a token the radio shows STOP. While Music Assistant is stopped, the radio
+shows `RADIO_IDLE_TEXT` instead of STOP (`RADIO_IDLE_STATUS`; which status makes the radio show the
+text is still being tried). Button presses are sent to HA without
+waiting for its reply; while HA is still busy with two presses, further ones are dropped, not queued.
+
+**Sound settings for radio playback are made on the radio** (the bridge's EQ, loudness, bass,
+fader/balance entities), not with Music Assistant's DSP: MA restarts playback on every DSP change.
+
+Skips at the start of playback are most likely Squeezelite underruns while the A2DP stream starts;
+`SQUEEZELITE_BUFFER` (`-b`) and `SQUEEZELITE_ALSA` (`-a`) set bigger buffers (untested).
 
 ## Settings (`/etc/jvc2mqtt/jvc2mqtt.conf`)
 
@@ -131,19 +151,47 @@ HA `media_player`. Without a token the radio shows STOP.
 |---|---|---|
 | `JVC_MAC` | empty | The radio's Bluetooth address (asked by `--configure`) |
 | `JVC_CHANNEL` | `16` | RFCOMM channel of the JVC Remote (SPP) service |
+| `BT_ADAPTER` | `hci0` | Bluetooth adapter that talks to the radio |
 | `ENABLE_RADIO_AUDIO` | `1` | Music Assistant player that plays through the radio |
 | `RADIO_AUDIO_NAME` | `Car-Radio` | Player name in Music Assistant |
 | `RADIO_AUDIO_SERVER` | empty (auto) | Music Assistant host, if auto-discovery fails |
 | `RADIO_RECONNECT_SECONDS` | `15` | Retry interval while the radio is off |
+| `SQUEEZELITE_BUFFER` | `4096:8192` | Squeezelite `-b` stream:output buffer (KB); empty = Squeezelite's default |
+| `SQUEEZELITE_ALSA` | `200:4` | Squeezelite `-a` BlueALSA buffer (ms):periods; empty = default (40:4) |
+| `SQUEEZELITE_MAC` | empty | Player MAC = Music Assistant player ID; pin it when moving hosts |
+| `RADIO_IDLE_STATUS` | `paused` | What the radio is told while MA is stopped: `stopped` (shows STOP), `paused`, `playing` |
+| `RADIO_IDLE_TEXT` | `Music Assistant` | Title shown while stopped (with `paused`/`playing`); empty = none |
 | `RADIO_HA_ENTITY` | empty (`media_player.<name>`) | HA media_player the radio's display and buttons follow. Needs the HA token `--configure` asks for (kept in `/etc/jvc2mqtt/ha-token`, mode 600, never in the config) |
 | `HA_API_URL` | empty (`http://homeassistant.local:8123`) | Home Assistant base URL for the API, e.g. `http://192.168.1.3:8123` |
+| `ENABLE_BRIDGE` | `0` | The jvc2mqtt bridge (asked by `--configure`) |
+| `MQTT_HOST` / `MQTT_PORT` | empty (`homeassistant.local`) / `1883` | MQTT broker (the Mosquitto app) |
+| `MQTT_USER` | empty | MQTT user; the password is kept in `/etc/jvc2mqtt/mqtt-password` (mode 600), never in the config |
+| `RADIO_ENTITY_PREFIX` | `car_radio` | Entity IDs are `<domain>.<prefix>_<setting>` |
+| `VOLUME_LIMIT` | `25` | Highest volume HA may set (the knob still goes higher) |
+| `MQTT_PREFIX` / `HA_DISCOVERY_PREFIX` | `jvc2mqtt` / `homeassistant` | Topic prefixes |
 
-## Bridge (to do)
+## Bridge (`jvc2mqtt.service`, `ENABLE_BRIDGE`)
 
-`jvc2mqtt` will:
+Keeps the RFCOMM link open (hello, ACKs, reconnect when it drops), sets the radio's clock on connect
+and hourly, and creates these entities through MQTT Discovery (device **Car Radio**):
 
-- keep the RFCOMM link open, answer the hello, ACK every frame, reconnect when the link drops
-- map MQTT topics to commands (keys, source select, EQ/loudness/bass settings)
-- publish status from the radio's notifications (volume, source, frequency, RDS, track info, EQ)
-- set the radio's clock on every connect and periodically (drift, DST)
-- use MQTT Discovery so HA creates the entities on its own
+| Entity | Radio side |
+|---|---|
+| `number.car_radio_volume` | reported by `12 04`; set by stepping Vol+/Vol− up to `VOLUME_LIMIT` |
+| `number.car_radio_fader`, `number.car_radio_balance` | −15 … +15, + = front / right; get `3d 0b`, set `3d 0c` |
+| `select.car_radio_eq_preset` | 11 presets incl. USER; `3d 0e` / `3d 0f` |
+| `number.car_radio_eq_band_01` … `_13` | dB (62.5 Hz … 16 kHz), `3d 04` / `3d 05`; edits within 1 s are saved together |
+| `select.car_radio_loudness` | Off, Level 1–2; `3d 4c` / `3d 4d` |
+| `select.car_radio_bass_boost` | Off, Level 1–5; `3d 49` / `3d 4a` |
+| `switch.car_radio_bass_extend` | `3d 40` / `3d 41` |
+| `select.car_radio_source` | AUX, AM, FM, BT audio; `11 01` |
+| `sensor.car_radio_tuner`, `_rds`, `_title`, `_artist` | notifications |
+| `switch.car_radio_remote_link` | off = let go of the radio so the JVC Remote app can connect |
+| `binary_sensor.car_radio_connected` | link up |
+
+The ranges of fader/balance and the EQ bands' layout are still to be confirmed live
+(`jvc-tests balance`). Stop the bridge before using `jvc-probe` or `jvc-tests`
+(`systemctl stop jvc2mqtt`), since only one remote can talk to the radio.
+
+The Music Assistant player for the radio is `media_player.car_radio` (MA player ID = Squeezelite's
+MAC, shown by `jvc2mqtt-check`).

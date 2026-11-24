@@ -12,7 +12,7 @@ INTERVAL=${RADIO_RECONNECT_SECONDS:-15}
 [ -n "$MAC" ] || { echo "JVC_MAC is not set in $CONF" >&2; exit 1; }
 
 A2DP_SINK=0000110b-0000-1000-8000-00805f9b34fb
-DEV_PATH=/org/bluez/hci0/dev_${MAC//:/_}
+DEV_PATH=/org/bluez/${BT_ADAPTER:-hci0}/dev_${MAC//:/_}
 
 a2dp_up() {   # BlueALSA has a playback PCM for the radio
     bluealsa-aplay -L 2>/dev/null | grep -qi "DEV=$MAC,PROFILE=a2dp"

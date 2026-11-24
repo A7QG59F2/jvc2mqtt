@@ -10,7 +10,8 @@ player, the same thing BlueZ's mpris-proxy does for desktop players):
       → polled over the REST API → PlaybackStatus / Metadata / Position → radio
   radio buttons → BlueZ → Play/Pause/Next/Previous here → HA media_player services
 
-Settings come from /etc/jvc2mqtt/jvc2mqtt.conf (HA_API_URL, RADIO_HA_ENTITY);
+Settings come from /etc/jvc2mqtt/jvc2mqtt.conf (HA_API_URL, RADIO_HA_ENTITY, BT_ADAPTER,
+RADIO_IDLE_STATUS, RADIO_IDLE_TEXT);
 the Home Assistant long-lived token from /etc/jvc2mqtt/ha-token.
 Run by jvc2mqtt-radio-avrcp.service.
 """
@@ -18,6 +19,7 @@ import datetime
 import json
 import re
 import sys
+import threading
 import urllib.error
 import urllib.request
 
@@ -33,6 +35,12 @@ MPRIS = "org.mpris.MediaPlayer2"
 PLAYER_IFACE = "org.mpris.MediaPlayer2.Player"
 PROPS_IFACE = "org.freedesktop.DBus.Properties"
 POLL_SECONDS = 2
+# Button presses are sent from worker threads so the D-Bus main loop never waits
+# on Home Assistant (it used to block up to 5 s per press when Music Assistant
+# hung, and presses piled up). At most this many calls may be in flight; more
+# presses while HA is stuck are dropped instead of queued and replayed later.
+MAX_CALLS_IN_FLIGHT = 2
+CALL_TIMEOUT = 10   # seconds a worker waits for HA's reply (nothing else waits on it)
 
 
 def log(msg):
@@ -61,19 +69,40 @@ class HomeAssistant:
     def __init__(self, base, token, entity):
         self.base, self.token, self.entity = base, token, entity
 
-    def _req(self, method, path, body=None):
+        self._slots = threading.BoundedSemaphore(MAX_CALLS_IN_FLIGHT)
+
+    def _req(self, method, path, body=None, timeout=5):
         req = urllib.request.Request(
             self.base + path, method=method,
             data=json.dumps(body).encode() if body is not None else None,
             headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=5) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read() or b"null")
 
     def state(self):
         return self._req("GET", f"/api/states/{self.entity}")
 
-    def call(self, service):
-        self._req("POST", f"/api/services/media_player/{service}", {"entity_id": self.entity})
+    def call_async(self, service, done=None):
+        """Fire a media_player service call from a worker thread and return at once.
+        Returns False (and sends nothing) if too many calls are still waiting on HA.
+        `done(error_or_None)` runs on the GLib main loop afterwards."""
+        if not self._slots.acquire(blocking=False):
+            return False
+
+        def work():
+            err = None
+            try:
+                self._req("POST", f"/api/services/media_player/{service}",
+                          {"entity_id": self.entity}, timeout=CALL_TIMEOUT)
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                err = e
+            finally:
+                self._slots.release()
+            if done:
+                GLib.idle_add(done, err)
+
+        threading.Thread(target=work, name=f"ha-{service}", daemon=True).start()
+        return True
 
 
 TAGGED = re.compile(r'(?:^|\s)text="([^"]*)"')
@@ -97,6 +126,9 @@ def to_status(state):
     return {"playing": "Playing", "paused": "Paused"}.get(state, "Stopped")
 
 
+IDLE_STATUSES = {"stopped": "Stopped", "paused": "Paused", "playing": "Playing"}
+
+
 def position_us(attrs, playing):
     pos = attrs.get("media_position")
     if pos is None:
@@ -112,9 +144,13 @@ def position_us(attrs, playing):
 
 
 class Player(dbus.service.Object):
-    def __init__(self, bus, ha):
+    def __init__(self, bus, ha, idle_status="Stopped", idle_text=""):
         super().__init__(bus, PLAYER_PATH)
         self.ha = ha
+        # What the radio sees while HA's player is stopped/idle/off: the radio shows
+        # STOP for "Stopped", so RADIO_IDLE_STATUS / RADIO_IDLE_TEXT can show text instead.
+        self.idle_status, self.idle_text = idle_status, idle_text
+        self.ha_playing = False   # HA's real state, for the play/pause button
         self.props = {
             "PlaybackStatus": dbus.String("Stopped"),
             "LoopStatus": dbus.String("None"),
@@ -133,6 +169,7 @@ class Player(dbus.service.Object):
         }
         self.track = None
         self.error = None
+        self.polling = False
 
     def _error(self, msg):   # log each problem once, not every poll
         if msg != self.error:
@@ -141,11 +178,16 @@ class Player(dbus.service.Object):
 
     # ── radio buttons (BlueZ calls these) ───────────────────────────────────
     def _do(self, service):
-        log(f"radio button → {service}")
-        try:
-            self.ha.call(service)
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            log(f"Home Assistant call {service} failed: {e}")
+        """Hand the press to HA without waiting; BlueZ gets its D-Bus reply at once."""
+        def done(err):
+            if err is not None:
+                log(f"Home Assistant call {service}: {err}")
+            self.refresh()
+
+        if self.ha.call_async(service, done):
+            log(f"radio button → {service}")
+        else:
+            log(f"radio button → {service} dropped (Home Assistant still busy with earlier presses)")
         GLib.timeout_add(500, self.refresh)
 
     @dbus.service.method(PLAYER_IFACE)
@@ -154,7 +196,8 @@ class Player(dbus.service.Object):
 
     @dbus.service.method(PLAYER_IFACE)
     def Pause(self):
-        self._do("media_pause")
+        # While idle is shown as "Playing" the radio sends Pause for its play button
+        self._do("media_pause" if self.ha_playing else "media_play")
 
     @dbus.service.method(PLAYER_IFACE)
     def PlayPause(self):
@@ -201,21 +244,42 @@ class Player(dbus.service.Object):
 
     # ── Home Assistant → radio ──────────────────────────────────────────────
     def refresh(self):
-        try:
-            st = self.ha.state()
-        except urllib.error.HTTPError as e:
-            self._error(f"Home Assistant: HTTP {e.code} for {self.ha.entity}"
-                        + (" (check the token)" if e.code == 401 else ""))
+        """Poll HA's state in a worker thread; the result is applied on the main loop.
+        Only one poll runs at a time, so a slow HA can't stack them up either."""
+        if self.polling:
             return False
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            self._error(f"Home Assistant unreachable: {e}")
+        self.polling = True
+
+        def work():
+            try:
+                res = ("ok", self.ha.state())
+            except urllib.error.HTTPError as e:
+                res = ("err", f"Home Assistant: HTTP {e.code} for {self.ha.entity}"
+                       + (" (check the token)" if e.code == 401 else ""))
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                res = ("err", f"Home Assistant unreachable: {e}")
+            GLib.idle_add(self._apply, res)
+
+        threading.Thread(target=work, name="ha-poll", daemon=True).start()
+        return False
+
+    def _apply(self, res):
+        self.polling = False
+        kind, st = res
+        if kind == "err":
+            self._error(st)
             return False
         if self.error:
             log("Home Assistant OK again")
             self.error = None
         a = st.get("attributes", {}) if isinstance(st, dict) else {}
         status = to_status(st.get("state") if isinstance(st, dict) else None)
+        self.ha_playing = status == "Playing"
         title, artist = clean_track(a.get("media_title"), a.get("media_artist"))
+        if status == "Stopped":
+            status = self.idle_status
+            if self.idle_text:
+                title, artist, a = self.idle_text, None, {}
         a = dict(a, media_title=title, media_artist=artist)
         meta = {}
         if title:
@@ -230,7 +294,7 @@ class Player(dbus.service.Object):
         new = {
             "PlaybackStatus": dbus.String(status),
             "Metadata": dbus.Dictionary(meta, signature="sv"),
-            "Position": dbus.Int64(position_us(a, status == "Playing")),
+            "Position": dbus.Int64(position_us(a, self.ha_playing)),
         }
         changed = {k: v for k, v in new.items()
                    if k != "Position" and self.props.get(k) != v}
@@ -258,15 +322,22 @@ def main():
         token = ""
     if not base or not token:
         sys.exit(f"Need a Home Assistant token in {TOKEN_FILE}")
-    log(f"Following {entity} on {base}")
+    adapter = conf.get("BT_ADAPTER") or "hci0"
+    log(f"Following {entity} on {base} (Bluetooth adapter {adapter})")
 
     bus = dbus.SystemBus()
-    player = Player(bus, HomeAssistant(base, token, entity))
+    idle = (conf.get("RADIO_IDLE_STATUS") or "stopped").strip().lower()
+    if idle not in IDLE_STATUSES:
+        log(f"RADIO_IDLE_STATUS={idle!r} not understood; using stopped")
+        idle = "stopped"
+    idle_text = (conf.get("RADIO_IDLE_TEXT") or "").strip()
+    log(f"While stopped the radio is told: {IDLE_STATUSES[idle]}" + (f", \"{idle_text}\"" if idle_text else ""))
+    player = Player(bus, HomeAssistant(base, token, entity), IDLE_STATUSES[idle], idle_text)
     registered = {"ok": False}
 
     def register():
         try:
-            media = dbus.Interface(bus.get_object("org.bluez", "/org/bluez/hci0"), "org.bluez.Media1")
+            media = dbus.Interface(bus.get_object("org.bluez", f"/org/bluez/{adapter}"), "org.bluez.Media1")
             media.RegisterPlayer(dbus.ObjectPath(PLAYER_PATH), player.props)
             registered["ok"] = True
             log("Registered with BlueZ as the radio's media player")
