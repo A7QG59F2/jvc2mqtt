@@ -10,7 +10,8 @@ player, the same thing BlueZ's mpris-proxy does for desktop players):
       → polled over the REST API → PlaybackStatus / Metadata / Position → radio
   radio buttons → BlueZ → Play/Pause/Next/Previous here → HA media_player services
 
-Settings come from /etc/jvc2mqtt/jvc2mqtt.conf (HA_API_URL, RADIO_HA_ENTITY, BT_ADAPTER);
+Settings come from /etc/jvc2mqtt/jvc2mqtt.conf (HA_API_URL, RADIO_HA_ENTITY, BT_ADAPTER,
+RADIO_IDLE_STATUS, RADIO_IDLE_TEXT);
 the Home Assistant long-lived token from /etc/jvc2mqtt/ha-token.
 Run by jvc2mqtt-radio-avrcp.service.
 """
@@ -125,6 +126,9 @@ def to_status(state):
     return {"playing": "Playing", "paused": "Paused"}.get(state, "Stopped")
 
 
+IDLE_STATUSES = {"stopped": "Stopped", "paused": "Paused", "playing": "Playing"}
+
+
 def position_us(attrs, playing):
     pos = attrs.get("media_position")
     if pos is None:
@@ -140,9 +144,13 @@ def position_us(attrs, playing):
 
 
 class Player(dbus.service.Object):
-    def __init__(self, bus, ha):
+    def __init__(self, bus, ha, idle_status="Stopped", idle_text=""):
         super().__init__(bus, PLAYER_PATH)
         self.ha = ha
+        # What the radio sees while HA's player is stopped/idle/off: the radio shows
+        # STOP for "Stopped", so RADIO_IDLE_STATUS / RADIO_IDLE_TEXT can show text instead.
+        self.idle_status, self.idle_text = idle_status, idle_text
+        self.ha_playing = False   # HA's real state, for the play/pause button
         self.props = {
             "PlaybackStatus": dbus.String("Stopped"),
             "LoopStatus": dbus.String("None"),
@@ -188,7 +196,8 @@ class Player(dbus.service.Object):
 
     @dbus.service.method(PLAYER_IFACE)
     def Pause(self):
-        self._do("media_pause")
+        # While idle is shown as "Playing" the radio sends Pause for its play button
+        self._do("media_pause" if self.ha_playing else "media_play")
 
     @dbus.service.method(PLAYER_IFACE)
     def PlayPause(self):
@@ -265,7 +274,12 @@ class Player(dbus.service.Object):
             self.error = None
         a = st.get("attributes", {}) if isinstance(st, dict) else {}
         status = to_status(st.get("state") if isinstance(st, dict) else None)
+        self.ha_playing = status == "Playing"
         title, artist = clean_track(a.get("media_title"), a.get("media_artist"))
+        if status == "Stopped":
+            status = self.idle_status
+            if self.idle_text:
+                title, artist, a = self.idle_text, None, {}
         a = dict(a, media_title=title, media_artist=artist)
         meta = {}
         if title:
@@ -280,7 +294,7 @@ class Player(dbus.service.Object):
         new = {
             "PlaybackStatus": dbus.String(status),
             "Metadata": dbus.Dictionary(meta, signature="sv"),
-            "Position": dbus.Int64(position_us(a, status == "Playing")),
+            "Position": dbus.Int64(position_us(a, self.ha_playing)),
         }
         changed = {k: v for k, v in new.items()
                    if k != "Position" and self.props.get(k) != v}
@@ -312,7 +326,13 @@ def main():
     log(f"Following {entity} on {base} (Bluetooth adapter {adapter})")
 
     bus = dbus.SystemBus()
-    player = Player(bus, HomeAssistant(base, token, entity))
+    idle = (conf.get("RADIO_IDLE_STATUS") or "stopped").strip().lower()
+    if idle not in IDLE_STATUSES:
+        log(f"RADIO_IDLE_STATUS={idle!r} not understood; using stopped")
+        idle = "stopped"
+    idle_text = (conf.get("RADIO_IDLE_TEXT") or "").strip()
+    log(f"While stopped the radio is told: {IDLE_STATUSES[idle]}" + (f", \"{idle_text}\"" if idle_text else ""))
+    player = Player(bus, HomeAssistant(base, token, entity), IDLE_STATUSES[idle], idle_text)
     registered = {"ok": False}
 
     def register():

@@ -134,7 +134,9 @@ is connected, and HA gets `media_player.car_radio`.
 
 With a Home Assistant token, `jvc2mqtt-radio-avrcp` also registers a Bluetooth media player, so the
 radio's display shows the play state and track, and its play/pause/next/previous buttons control the
-HA `media_player`. Without a token the radio shows STOP. Button presses are sent to HA without
+HA `media_player`. Without a token the radio shows STOP. While Music Assistant is stopped, the radio
+shows `RADIO_IDLE_TEXT` instead of STOP (`RADIO_IDLE_STATUS`; which status makes the radio show the
+text is still being tried). Button presses are sent to HA without
 waiting for its reply; while HA is still busy with two presses, further ones are dropped, not queued.
 
 **Sound settings for radio playback are made on the radio** (the bridge's EQ, loudness, bass,
@@ -157,6 +159,8 @@ Skips at the start of playback are most likely Squeezelite underruns while the A
 | `SQUEEZELITE_BUFFER` | `4096:8192` | Squeezelite `-b` stream:output buffer (KB); empty = Squeezelite's default |
 | `SQUEEZELITE_ALSA` | `200:4` | Squeezelite `-a` BlueALSA buffer (ms):periods; empty = default (40:4) |
 | `SQUEEZELITE_MAC` | empty | Player MAC = Music Assistant player ID; pin it when moving hosts |
+| `RADIO_IDLE_STATUS` | `paused` | What the radio is told while MA is stopped: `stopped` (shows STOP), `paused`, `playing` |
+| `RADIO_IDLE_TEXT` | `Music Assistant` | Title shown while stopped (with `paused`/`playing`); empty = none |
 | `RADIO_HA_ENTITY` | empty (`media_player.<name>`) | HA media_player the radio's display and buttons follow. Needs the HA token `--configure` asks for (kept in `/etc/jvc2mqtt/ha-token`, mode 600, never in the config) |
 | `HA_API_URL` | empty (`http://homeassistant.local:8123`) | Home Assistant base URL for the API, e.g. `http://192.168.1.3:8123` |
 | `ENABLE_BRIDGE` | `0` | The jvc2mqtt bridge (asked by `--configure`) |

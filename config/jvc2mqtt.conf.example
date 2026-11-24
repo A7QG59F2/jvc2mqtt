@@ -40,6 +40,12 @@ SQUEEZELITE_ALSA="200:4"
 # (e.g. "70:f1:1c:18:57:7c") so the player keeps its ID and settings if the
 # radio moves to another host. Empty = this host's network address.
 SQUEEZELITE_MAC=""
+# What the radio's display shows while Music Assistant is stopped. The radio
+# shows STOP for "stopped"; "paused" or "playing" with RADIO_IDLE_TEXT show that
+# text as the track title instead. (With "playing" the radio's play button still
+# starts playback: its Pause press is sent to HA as play.)
+RADIO_IDLE_STATUS="paused"
+RADIO_IDLE_TEXT="Music Assistant"
 # The radio's display (play state, track) and its play/pause/next/previous
 # buttons follow this Home Assistant media_player. Needs a long-lived access
 # token, which --configure asks for and keeps in /etc/jvc2mqtt/ha-token
