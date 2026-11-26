@@ -167,7 +167,6 @@ Skips at the start of playback are most likely Squeezelite underruns while the A
 | `MQTT_HOST` / `MQTT_PORT` | empty (the host in `HA_API_URL`, else `homeassistant.local`) / `1883` | MQTT broker (the Mosquitto app) |
 | `MQTT_USER` | empty | MQTT user; the password is kept in `/etc/jvc2mqtt/mqtt-password` (mode 600), never in the config |
 | `RADIO_ENTITY_PREFIX` | `car_radio` | Entity IDs are `<domain>.<prefix>_<setting>` |
-| `VOLUME_LIMIT` | `25` | Highest volume HA may set (the knob still goes higher) |
 | `MQTT_PREFIX` / `HA_DISCOVERY_PREFIX` | `jvc2mqtt` / `homeassistant` | Topic prefixes |
 
 ## Bridge (`jvc2mqtt.service`, `ENABLE_BRIDGE`)
@@ -177,7 +176,7 @@ and hourly, and creates these entities through MQTT Discovery (device **Car Radi
 
 | Entity | Radio side |
 |---|---|
-| `number.car_radio_volume` | reported by `12 04`; set by stepping Vol+/Vol− up to `VOLUME_LIMIT` |
+| `number.car_radio_volume` | 0 … 50, reported by `12 04`; set by stepping Vol+/Vol−. Shows the new value at once and the radio's real one when the steps finish; a newer value steers a run already going. The top is the radio's own AMP GAIN setting (Low Power stops at 30) |
 | `number.car_radio_fader`, `number.car_radio_balance` | −15 … +15, + = front / right; get `3d 0b`, set `3d 0c` |
 | `select.car_radio_eq_preset` | 11 presets incl. USER; `3d 0e` / `3d 0f` |
 | `number.car_radio_eq_band_01` … `_13` | dB (62.5 Hz … 16 kHz), `3d 04` / `3d 05`; edits within 1 s are saved together |

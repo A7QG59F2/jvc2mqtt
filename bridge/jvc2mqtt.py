@@ -36,6 +36,7 @@ STATE_FILE = "/var/lib/jvc2mqtt/state.json"
 CLOCK_EVERY = 3600          # re-set the radio's clock (drift, DST)
 EQ_SAVE_DELAY = 1.0         # band edits are gathered, then saved together (one 3d 05)
 VOLUME_STEP_WAIT = 1.0      # wait for the radio's 12 04 after each Vol± key
+VOLUME_MAX = 50             # the radio's top (AMP GAIN High Power; Low Power stops it at 30 itself)
 
 
 def log(msg):
@@ -181,7 +182,6 @@ class Bridge:
         adapter = conf.get("BT_ADAPTER") or "hci0"
         self.adapter_addr = read_secret(f"/sys/class/bluetooth/{adapter}/address")
         self.reconnect = max(5, int(conf.get("RADIO_RECONNECT_SECONDS") or 15))
-        self.volume_limit = int(conf.get("VOLUME_LIMIT") or 25)
         self.prefix = (conf.get("MQTT_PREFIX") or "jvc2mqtt").strip("/")
         self.disc = (conf.get("HA_DISCOVERY_PREFIX") or "homeassistant").strip("/")
         self.obj = re.sub(r"[^a-z0-9_]", "_", (conf.get("RADIO_ENTITY_PREFIX") or "car_radio").lower())
@@ -191,6 +191,8 @@ class Bridge:
         self.cmds = queue.Queue()
         self.state = {}               # key → last published value
         self.volume, self.volume_n = None, 0
+        self.volume_target = None     # newest volume asked for; a step run follows it as it moves
+        self.volume_stepping = False  # while stepping, HA is shown the target, not each step
         self.fb = None                # (fader, balance)
         self.eq = None                # jvcproto.EqBands
         self.eq_dirty_at = None
@@ -228,7 +230,7 @@ class Bridge:
             cfg["_settable"], cfg["_radio"] = settable, radio
             e[key] = (comp, cfg)
 
-        add("volume", "number", "Volume", min=0, max=self.volume_limit, step=1, mode="slider",
+        add("volume", "number", "Volume", min=0, max=VOLUME_MAX, step=1, mode="slider",
             icon="mdi:volume-high")
         add("fader", "number", "Fader", min=-15, max=15, step=1, mode="slider", icon="mdi:car-seat",
             entity_category="config")
@@ -312,6 +314,16 @@ class Bridge:
                 self.discovery()
             return
         key = msg.topic[len(self.base) + 1:-len("/set")]
+        if key == "volume":
+            # only the newest target matters: a dragged slider sends many, and a step run
+            # already under way turns toward the newest one instead of finishing each in turn
+            try:
+                self.volume_target = max(0, min(VOLUME_MAX, int(float(msg.payload))))
+            except ValueError:
+                log(f"bad value for volume: {msg.payload!r}")
+                return
+            if self.link:
+                self.publish("volume", self.volume_target)   # HA (and screens) jump straight there
         if key in self.entities:
             self.cmds.put((key, msg.payload.decode("utf-8", "replace").strip()))
 
@@ -326,7 +338,8 @@ class Bridge:
         k, p = (f.grp, f.cmd), f.payload
         if k == (0x12, 0x04) and p:
             self.volume, self.volume_n = p[0], self.volume_n + 1
-            self.publish("volume", p[0])
+            if not self.volume_stepping:
+                self.publish("volume", p[0])
         elif k == (0x12, 0x02):
             self._eq_name(P.ascii_field(p))
         elif k == (0x12, 0x01) and len(p) >= 3:
@@ -404,7 +417,7 @@ class Bridge:
             return   # entities are unavailable while the radio is away
         try:
             if key == "volume":
-                self.set_volume(int(float(val)))
+                self.set_volume()
             elif key in ("fader", "balance"):
                 fader, balance = self.fb or (0, 0)
                 v = max(-15, min(15, int(float(val))))
@@ -450,19 +463,31 @@ class Bridge:
             self.link.pump(0.05)
         return self.volume_n != n
 
-    def set_volume(self, target):
-        """The radio has only Vol+/Vol−: step there, checking each 12 04 report."""
-        target = max(0, min(self.volume_limit, target))
-        if self.volume is None and not self._key_and_wait(P.KEY_VOL_DOWN):   # learn where it is
-            log("radio didn't report its volume")
+    def set_volume(self):
+        """The radio has only Vol+/Vol−: step toward volume_target, checking each 12 04 report.
+
+        The target is re-read on every step, so a newer request steers the run already going
+        (queued duplicates then find nothing to do). HA is shown the target while stepping and
+        the radio's real volume at the end (e.g. 30 when AMP GAIN is Low Power)."""
+        if self.volume_target is None:
             return
-        for _ in range(60):
-            if self.volume == target:
+        self.volume_stepping = True
+        try:
+            if self.volume is None and not self._key_and_wait(P.KEY_VOL_DOWN):   # learn where it is
+                log("radio didn't report its volume")
                 return
-            if not self._key_and_wait(P.KEY_VOL_UP if self.volume < target else P.KEY_VOL_DOWN):
-                log("radio stopped reporting volume; giving up")
+            for _ in range(2 * VOLUME_MAX + 10):
+                target = self.volume_target
+                if self.volume == target:
+                    return
+                if not self._key_and_wait(P.KEY_VOL_UP if self.volume < target else P.KEY_VOL_DOWN):
+                    log(f"radio stopped at volume {self.volume} (target {target})")
+                    self.volume_target = self.volume
+                    return
+        finally:
+            self.volume_stepping = False
+            if self.volume is not None:
                 self.publish("volume", self.volume)
-                return
 
     # ── session / main loop ──────────────────────────────────────────────────
     def set_clock(self):
@@ -506,6 +531,7 @@ class Bridge:
             self.link.close()
             self.link = None
             self.volume, self.eq_dirty_at = None, None
+            self.volume_target, self.volume_stepping = None, False
             self.publish("radio", "offline", raw=True)
             self.publish("connected", "OFF")
 

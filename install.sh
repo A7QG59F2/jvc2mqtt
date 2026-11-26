@@ -49,7 +49,7 @@ load_conf() {
     : "${JVC_MAC:=}" "${JVC_CHANNEL:=16}" "${BT_ADAPTER:=hci0}"
     : "${SQUEEZELITE_BUFFER:=}" "${SQUEEZELITE_ALSA:=}" "${SQUEEZELITE_MAC:=}"
     : "${ENABLE_BRIDGE:=0}" "${MQTT_HOST:=}" "${MQTT_PORT:=1883}" "${MQTT_USER:=}"
-    : "${RADIO_ENTITY_PREFIX:=car_radio}" "${VOLUME_LIMIT:=25}"
+    : "${RADIO_ENTITY_PREFIX:=car_radio}"
     : "${ENABLE_RADIO_AUDIO:=1}" "${RADIO_AUDIO_NAME:=Car-Radio}" "${RADIO_AUDIO_SERVER:=}"
 }
 on() { [ "${!1:-0}" = "1" ]; }
@@ -264,6 +264,12 @@ fi
 if [ -w "$OLD_CONF" ] && grep -qE "^(ENABLE_JVC_TOOLS|${MOVED_KEYS// /|})=" "$OLD_CONF"; then
     sed -i -E "/^(ENABLE_JVC_TOOLS|${MOVED_KEYS// /|})=/d" "$OLD_CONF"
     say "Removed the JVC settings from $OLD_CONF (they live in $CONF now)"
+fi
+# Settings the repo no longer has: take them out so the config doesn't suggest they still work
+RETIRED_KEYS="VOLUME_LIMIT"   # 2026-11: the volume's top is the radio's AMP GAIN setting
+if grep -qE "^(${RETIRED_KEYS// /|})=" "$CONF"; then
+    sed -i -E "/^(${RETIRED_KEYS// /|})=/d; /^# Highest volume Home Assistant may set/d" "$CONF"
+    say "Removed retired settings from $CONF: $RETIRED_KEYS"
 fi
 # Settings added to the repo after this was set up: append them with their defaults
 ADDED=""
