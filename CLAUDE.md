@@ -88,7 +88,6 @@ setup stays out of this one.
 
 ## Rules from Adam
 
-- Every push to GitHub needs his approval first.
 - Install on Home Assistant only through the Apps store or HACS, with approval; never the Supervisor API.
 
 ## Conventions
@@ -99,3 +98,11 @@ setup stays out of this one.
   If a new setting is a per-install choice, also ask it in `configure()`.
 - Switching a part off must undo what it set up; `--check` only reports enabled parts.
 - Don't commit logcat captures (they contain whatever the phone was playing).
+
+## Permissions
+
+- This repo is public, so it doesn't ship a Claude Code `.claude/settings.json`. When a task needs `git push` or a pull request and pushing isn't already allowed in the session, ask the user at the start of that session whether to add the git-push rule: allow branch pushes, creating branches and pull requests; block force-pushes, pushes to `main` or `master`, deletes and merges. Don't push until they say yes.
+
+## Pull requests
+
+- Every pull request includes a changelog entry in this repo's `CHANGELOG.md`: newest first, in plain language, saying what changed and what to do after merging. If the repo has no changelog yet, the PR starts one.
