@@ -65,8 +65,6 @@ MQTT_PORT="1883"
 MQTT_USER=""
 # Entity IDs are <domain>.<RADIO_ENTITY_PREFIX>_<setting>, e.g. number.car_radio_volume
 RADIO_ENTITY_PREFIX="car_radio"
-# Highest volume Home Assistant may set (the knob on the radio still goes higher)
-VOLUME_LIMIT="25"
 # Topic prefixes
 MQTT_PREFIX="jvc2mqtt"
 HA_DISCOVERY_PREFIX="homeassistant"
