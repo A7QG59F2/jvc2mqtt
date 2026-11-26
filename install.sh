@@ -56,6 +56,12 @@ on() { [ "${!1:-0}" = "1" ]; }
 # The adapter's own address, so bluetoothctl looks at BT_ADAPTER and not just the default one
 adapter_addr() { cat "/sys/class/bluetooth/$BT_ADAPTER/address" 2>/dev/null || true; }
 onoff() { on "$1" && echo on || echo off; }
+# Same fallback as the bridge: MQTT_HOST, else the host in HA_API_URL, else homeassistant.local
+mqtt_host() {
+    local h=${MQTT_HOST:-}
+    [ -n "$h" ] || h=$(printf '%s' "${HA_API_URL:-}" | sed -nE 's|^[a-z]+://\[?([^]/:]+).*|\1|p')
+    echo "${h:-homeassistant.local}"
+}
 
 # ─── Health report ────────────────────────────────────────────────────────────
 check() {
@@ -96,7 +102,7 @@ check() {
     fi
     if on ENABLE_BRIDGE; then
         printf "  %-11s %s\n" jvc2mqtt "$(systemctl is-active jvc2mqtt 2>/dev/null || true)"
-        printf "  %-11s %s\n" MQTT "${MQTT_HOST:-homeassistant.local}:$MQTT_PORT user ${MQTT_USER:-(none)}$([ -s "$MQTT_PASSWORD_FILE" ] || echo ', no password saved')"
+        printf "  %-11s %s\n" MQTT "$(mqtt_host):$MQTT_PORT user ${MQTT_USER:-(none)}$([ -s "$MQTT_PASSWORD_FILE" ] || echo ', no password saved')"
         echo "  entities:   number.${RADIO_ENTITY_PREFIX}_{volume,fader,balance,eq_band_01…13}"
         echo "              select.${RADIO_ENTITY_PREFIX}_{eq_preset,loudness,bass_boost,source}"
         echo "              switch.${RADIO_ENTITY_PREFIX}_{bass_extend,remote_link}"
@@ -211,7 +217,7 @@ configure() {
     if on ENABLE_BRIDGE; then
         echo "  The bridge holds the radio's remote link, so the JVC Remote phone app can't connect"
         echo "  while it does. Turn switch.${RADIO_ENTITY_PREFIX}_remote_link off in HA to let the app in."
-        ask_str MQTT_HOST "  MQTT broker (empty = homeassistant.local)"
+        ask_str MQTT_HOST "  MQTT broker (empty = Home Assistant's host)"
         ask_str MQTT_PORT "  MQTT port"
         ask_str MQTT_USER "  MQTT user (a Home Assistant user works with the Mosquitto app)"
         read_mqtt_password

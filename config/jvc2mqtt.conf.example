@@ -57,7 +57,7 @@ RADIO_HA_ENTITY=""
 # Holds the radio's remote link, so the JVC Remote phone app can't connect
 # while it runs; switch.<RADIO_ENTITY_PREFIX>_remote_link off lets the app in.
 ENABLE_BRIDGE="0"
-# MQTT broker (the Mosquitto app on Home Assistant). Empty = homeassistant.local
+# MQTT broker (the Mosquitto app on Home Assistant). Empty = the host in HA_API_URL, else homeassistant.local
 MQTT_HOST=""
 MQTT_PORT="1883"
 # The password is asked by --configure and kept in /etc/jvc2mqtt/mqtt-password

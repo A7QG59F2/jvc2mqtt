@@ -37,7 +37,7 @@ Play Music Assistant through the radio over Bluetooth? [Y/n]
   Home Assistant address (empty = http://homeassistant.local:8123) []
   ...Home Assistant long-lived access token
 Run the jvc2mqtt bridge (radio settings as Home Assistant entities over MQTT)? [y/N]
-  MQTT broker (empty = homeassistant.local) []
+  MQTT broker (empty = Home Assistant's host) []
   MQTT user / password
 ```
 
@@ -164,7 +164,7 @@ Skips at the start of playback are most likely Squeezelite underruns while the A
 | `RADIO_HA_ENTITY` | empty (`media_player.<name>`) | HA media_player the radio's display and buttons follow. Needs the HA token `--configure` asks for (kept in `/etc/jvc2mqtt/ha-token`, mode 600, never in the config) |
 | `HA_API_URL` | empty (`http://homeassistant.local:8123`) | Home Assistant base URL for the API, e.g. `http://192.168.1.3:8123` |
 | `ENABLE_BRIDGE` | `0` | The jvc2mqtt bridge (asked by `--configure`) |
-| `MQTT_HOST` / `MQTT_PORT` | empty (`homeassistant.local`) / `1883` | MQTT broker (the Mosquitto app) |
+| `MQTT_HOST` / `MQTT_PORT` | empty (the host in `HA_API_URL`, else `homeassistant.local`) / `1883` | MQTT broker (the Mosquitto app) |
 | `MQTT_USER` | empty | MQTT user; the password is kept in `/etc/jvc2mqtt/mqtt-password` (mode 600), never in the config |
 | `RADIO_ENTITY_PREFIX` | `car_radio` | Entity IDs are `<domain>.<prefix>_<setting>` |
 | `VOLUME_LIMIT` | `25` | Highest volume HA may set (the knob still goes higher) |

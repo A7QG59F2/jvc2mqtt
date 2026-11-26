@@ -55,6 +55,14 @@ def read_conf(path=CONF):
     return conf
 
 
+def mqtt_host(conf):
+    """MQTT_HOST, else the host in HA_API_URL (the Mosquitto app runs on HA), else homeassistant.local."""
+    if conf.get("MQTT_HOST"):
+        return conf["MQTT_HOST"]
+    m = re.match(r"^[a-z]+://\[?([^/:\]]+)", conf.get("HA_API_URL") or "")
+    return m.group(1) if m else "homeassistant.local"
+
+
 def read_secret(path):
     try:
         with open(path) as f:
@@ -279,6 +287,7 @@ class Bridge:
             c.username_pw_set(user, read_secret(MQTT_PASSWORD_FILE))
         c.will_set(f"{self.base}/status", "offline", retain=True)
         c.on_connect = self._on_connect
+        c.on_connect_fail = lambda *_: log("MQTT broker not reachable; retrying")
         c.on_message = self._on_message
         return c
 
@@ -501,7 +510,7 @@ class Bridge:
             self.publish("connected", "OFF")
 
     def run(self):
-        host = self.conf.get("MQTT_HOST") or "homeassistant.local"
+        host = mqtt_host(self.conf)
         port = int(self.conf.get("MQTT_PORT") or 1883)
         self.mqtt.connect_async(host, port, keepalive=30)
         self.mqtt.loop_start()
