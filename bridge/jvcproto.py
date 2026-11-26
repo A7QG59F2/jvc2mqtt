@@ -102,13 +102,18 @@ def fader_balance_payload(fader, balance):
 
 
 class EqBands:
-    """3d 04 reply / 3d 05 payload. PROTOCOL.md: [Q index] [band value] × 13, value = 9 − dB.
-    Read as 13 (Q, value) pairs (26 bytes); a 14-byte reply is read as one Q + 13 values.
+    """3d 04 reply / 3d 05 payload, value = 9 − dB (PROTOCOL.md).
+    The real radio replies with 27 bytes: [Q index] then [band 00…0c] [value] × 13.
+    Also read: 13 (Q, value) pairs (26 bytes) and one Q + 13 values (14 bytes).
     Written back in the same layout it was read in."""
 
     def __init__(self, payload):
         p = bytes(payload)
-        if len(p) == 26:
+        if len(p) == 27:
+            if list(p[1:27:2]) != list(range(13)):
+                raise ValueError(f"unexpected EQ band numbers {p[1:27:2].hex(' ')}")
+            self.layout, self.q, self.raw = "q_band_pairs", [p[0]] * 13, list(p[2:27:2])
+        elif len(p) == 26:
             self.layout, self.q = "pairs", [p[i] for i in range(0, 26, 2)]
             self.raw = [p[i] for i in range(1, 26, 2)]
         elif len(p) == 14:
@@ -123,6 +128,8 @@ class EqBands:
         self.raw[i] = 9 - int(db)
 
     def payload(self):
+        if self.layout == "q_band_pairs":
+            return bytes([self.q[0]] + [b for i in range(13) for b in (i, self.raw[i])])
         if self.layout == "pairs":
             return bytes(b for i in range(13) for b in (self.q[i], self.raw[i]))
         return bytes([self.q[0]] + self.raw)

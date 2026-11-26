@@ -142,7 +142,8 @@ fixed-width ASCII names. Sets are answered with `5d xx [01]` = OK.
 | `50 [00]` | | → `02` | | *(unconfirmed)*, sent when the settings menu opens |
 | `61 [00]` | | → `05 00` | | *(unconfirmed)*, sent when the sub screen opens |
 
-**EQ bands** (`3d 04` reply / `3d 05` set): `[Q index] [band value] × 13`, bands `00`–`0c` =
+**EQ bands** (`3d 04` reply / `3d 05` set): `[Q index]` then `[band] [value] × 13` (27 bytes,
+seen from the real radio 2026-11-25: `01 00 04 01 08 02 09 … 0c 02`), bands `00`–`0c` =
 62.5 Hz, 100, 160, 250, 400, 630, 1k, 1.6k, 2.5k, 4k, 6.3k, … Hz. **value = 9 − dB**
 (`09` = 0 dB, `07` = +2 dB, `0a` = −1 dB). Edits only reach the radio on SAVE (one `3d 05`
 with all 13 bands).
