@@ -14,6 +14,8 @@ the JVC Remote phone app can connect; turn it back on to take it again.
 Settings: /etc/jvc2mqtt/jvc2mqtt.conf. MQTT password: /etc/jvc2mqtt/mqtt-password
 (mode 600, never in the config). Run by jvc2mqtt.service.
 """
+import errno
+import fcntl
 import json
 import os
 import queue
@@ -21,6 +23,7 @@ import re
 import select
 import signal
 import socket
+import struct
 import sys
 import threading
 import time
@@ -156,12 +159,31 @@ class RadioLink:
         return None
 
 
-def connect(mac, channel, adapter_addr=None, timeout=8.0):
+HCIGETDEVINFO = 0x800448D3   # _IOR('H', 211, int)
+
+
+def adapter_address(name):
+    """The address of adapter `name` (hci0, hci1, …), asked of the kernel: not every kernel
+    has /sys/class/bluetooth/<name>/address. OSError if there is no such adapter."""
+    m = re.fullmatch(r"hci(\d+)", name)
+    if m:
+        info = bytearray(128)             # struct hci_dev_info: u16 id, char name[8], bdaddr, …
+        struct.pack_into("=H", info, 0, int(m.group(1)))
+        try:
+            with socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW, socket.BTPROTO_HCI) as s:
+                fcntl.ioctl(s.fileno(), HCIGETDEVINFO, info, True)
+            return ":".join(f"{x:02X}" for x in reversed(info[10:16]))
+        except OSError as e:
+            if e.errno != errno.ENODEV:
+                raise
+    raise OSError(errno.ENODEV, f"Bluetooth adapter {name} not found")
+
+
+def connect(mac, channel, adapter_addr, timeout=8.0):
     s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
     s.settimeout(timeout)
     try:
-        if adapter_addr:
-            s.bind((adapter_addr, 0))
+        s.bind((adapter_addr, 0))   # always: unbound, the kernel may pick another adapter
         s.connect((mac, channel))
     except OSError:
         s.close()
@@ -179,8 +201,7 @@ class Bridge:
         if not re.fullmatch(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", self.mac):
             sys.exit(f"JVC_MAC is not set in {CONF}")
         self.channel = int(conf.get("JVC_CHANNEL") or 16)
-        adapter = conf.get("BT_ADAPTER") or "hci0"
-        self.adapter_addr = read_secret(f"/sys/class/bluetooth/{adapter}/address")
+        self.adapter = conf.get("BT_ADAPTER") or "hci0"
         self.reconnect = max(5, int(conf.get("RADIO_RECONNECT_SECONDS") or 15))
         self.prefix = (conf.get("MQTT_PREFIX") or "jvc2mqtt").strip("/")
         self.disc = (conf.get("HA_DISCOVERY_PREFIX") or "homeassistant").strip("/")
@@ -393,9 +414,14 @@ class Bridge:
             self.publish("bass_extend", "ON" if p[0] else "OFF")
 
     def read_settings(self):
+        """Ask for every setting; returns how many the radio answered."""
+        answered = 0
         for cmd in (0x0E, 0x0B, 0x04, 0x4C, 0x49, 0x40):
             if self.link.request(0x3D, cmd, reply=(0x5D, cmd)) is None:
                 log(f"no reply to 3d {cmd:02x}")
+            else:
+                answered += 1
+        return answered
 
     # ── HA → radio ───────────────────────────────────────────────────────────
     def _set(self, cmd, payload, get):
@@ -509,7 +535,9 @@ class Bridge:
             self.link.request(0x3B, 0x12, reply=(0x5B, 0x12))
             self.link.request(0x3B, 0x30, reply=(0x5B, 0x30))
             self.link.pump(3)      # rest of the source list; commands sent during it are ignored
-            self.read_settings()
+            if not self.read_settings():
+                raise LinkDown("link open but the radio isn't answering; reconnecting "
+                               "(if this keeps happening, turn the radio off and on)")
             self.publish("radio", "online", raw=True)
             self.publish("connected", "ON")
             log("radio connected")
@@ -547,7 +575,8 @@ class Bridge:
                 self._idle(1)
                 continue
             try:
-                sock = connect(self.mac, self.channel, self.adapter_addr)
+                # looked up every time: an adapter can be replugged or change its number
+                sock = connect(self.mac, self.channel, adapter_address(self.adapter))
             except OSError as e:
                 err = e.strerror or str(e)
                 if err != last_err:

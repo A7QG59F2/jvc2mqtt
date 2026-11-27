@@ -333,11 +333,12 @@ def main():
     idle_text = (conf.get("RADIO_IDLE_TEXT") or "").strip()
     log(f"While stopped the radio is told: {IDLE_STATUSES[idle]}" + (f", \"{idle_text}\"" if idle_text else ""))
     player = Player(bus, HomeAssistant(base, token, entity), IDLE_STATUSES[idle], idle_text)
-    registered = {"ok": False}
+    adapter_path = f"/org/bluez/{adapter}"
+    registered = {"ok": False, "timer": None}
 
     def register():
         try:
-            media = dbus.Interface(bus.get_object("org.bluez", f"/org/bluez/{adapter}"), "org.bluez.Media1")
+            media = dbus.Interface(bus.get_object("org.bluez", adapter_path), "org.bluez.Media1")
             media.RegisterPlayer(dbus.ObjectPath(PLAYER_PATH), player.props)
             registered["ok"] = True
             log("Registered with BlueZ as the radio's media player")
@@ -346,21 +347,49 @@ def main():
                 registered["ok"] = True
             else:
                 log(f"BlueZ RegisterPlayer failed ({e.get_dbus_name()}); retrying")
+        if registered["ok"]:
+            registered["timer"] = None
         return not registered["ok"]   # keep the retry timer going until it works
+
+    def stop_retrying():
+        if registered["timer"]:
+            GLib.source_remove(registered["timer"])
+            registered["timer"] = None
+
+    def register_soon(seconds=2):
+        registered["ok"] = False
+        stop_retrying()   # never two retry timers
+        registered["timer"] = GLib.timeout_add_seconds(seconds, register)
 
     def bluez_owner_changed(new_owner):
         # bluetoothd restarted: our registration is gone, do it again
         registered["ok"] = False
+        stop_retrying()
         if new_owner:
-            GLib.timeout_add_seconds(2, register)
+            register_soon()
 
+    def interfaces_added(path, interfaces):
+        # the adapter came back (replugged, driver reloaded): BlueZ forgot our registration
+        if str(path) == adapter_path and "org.bluez.Media1" in interfaces:
+            register_soon()
+
+    def interfaces_removed(path, interfaces):
+        if str(path) == adapter_path and "org.bluez.Media1" in interfaces:
+            log(f"Bluetooth adapter {adapter} went away; will register again when it's back")
+            registered["ok"] = False
+            stop_retrying()
+
+    for signal_name, handler in (("InterfacesAdded", interfaces_added),
+                                 ("InterfacesRemoved", interfaces_removed)):
+        bus.add_signal_receiver(handler, signal_name=signal_name, bus_name="org.bluez",
+                                dbus_interface="org.freedesktop.DBus.ObjectManager")
     bus.watch_name_owner("org.bluez", bluez_owner_changed)
 
     def tick():
         player.refresh()
         return True
 
-    GLib.timeout_add_seconds(5, register)
+    register_soon(5)
     GLib.timeout_add_seconds(POLL_SECONDS, tick)
     tick()
     GLib.MainLoop().run()
