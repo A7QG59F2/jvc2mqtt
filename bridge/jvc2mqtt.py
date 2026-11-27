@@ -162,21 +162,34 @@ class RadioLink:
 HCIGETDEVINFO = 0x800448D3   # _IOR('H', 211, int)
 
 
-def adapter_address(name):
-    """The address of adapter `name` (hci0, hci1, …), asked of the kernel: not every kernel
-    has /sys/class/bluetooth/<name>/address. OSError if there is no such adapter."""
-    m = re.fullmatch(r"hci(\d+)", name)
+def _adapter_by_index(index):
+    """The address of hci<index>, or None if there is no such adapter."""
+    info = bytearray(128)                 # struct hci_dev_info: u16 id, char name[8], bdaddr, …
+    struct.pack_into("=H", info, 0, index)
+    try:
+        with socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW, socket.BTPROTO_HCI) as s:
+            fcntl.ioctl(s.fileno(), HCIGETDEVINFO, info, True)
+    except OSError as e:
+        if e.errno != errno.ENODEV:
+            raise
+        return None
+    return ":".join(f"{x:02X}" for x in reversed(info[10:16]))
+
+
+def adapter_address(want):
+    """The address of the adapter `want`: a name (hci0, hci1, …) or its own address, which
+    stays the same when Linux renumbers adapters. Asked of the kernel, since not every kernel
+    has /sys/class/bluetooth/<name>/address. OSError if that adapter isn't there."""
+    m = re.fullmatch(r"hci(\d+)", want)
     if m:
-        info = bytearray(128)             # struct hci_dev_info: u16 id, char name[8], bdaddr, …
-        struct.pack_into("=H", info, 0, int(m.group(1)))
-        try:
-            with socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW, socket.BTPROTO_HCI) as s:
-                fcntl.ioctl(s.fileno(), HCIGETDEVINFO, info, True)
-            return ":".join(f"{x:02X}" for x in reversed(info[10:16]))
-        except OSError as e:
-            if e.errno != errno.ENODEV:
-                raise
-    raise OSError(errno.ENODEV, f"Bluetooth adapter {name} not found")
+        address = _adapter_by_index(int(m.group(1)))
+        if address:
+            return address
+    elif re.fullmatch(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", want):
+        for index in range(16):
+            if _adapter_by_index(index) == want.upper():
+                return want.upper()
+    raise OSError(errno.ENODEV, f"Bluetooth adapter {want} not found")
 
 
 def connect(mac, channel, adapter_addr, timeout=8.0):

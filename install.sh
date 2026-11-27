@@ -53,8 +53,25 @@ load_conf() {
     : "${ENABLE_RADIO_AUDIO:=1}" "${RADIO_AUDIO_NAME:=Car-Radio}" "${RADIO_AUDIO_SERVER:=}"
 }
 on() { [ "${!1:-0}" = "1" ]; }
+# Prints "hciN ADDRESS" for BT_ADAPTER, which is a name (hci0) or the adapter's own address
+# (stays the same when Linux renumbers adapters). Fails if that adapter isn't there.
+find_adapter() {
+    local want=${BT_ADAPTER:-hci0} sys name addr
+    for sys in /sys/class/bluetooth/hci*; do
+        name=${sys##*/}
+        [[ $name =~ ^hci[0-9]+$ ]] || continue
+        addr=$(busctl --system get-property org.bluez "/org/bluez/$name" \
+            org.bluez.Adapter1 Address 2>/dev/null | cut -d'"' -f2)
+        [ -n "$addr" ] || continue
+        if [ "$name" = "$want" ] || [ "${addr^^}" = "${want^^}" ]; then
+            echo "$name $addr"
+            return 0
+        fi
+    done
+    return 1
+}
 # The adapter's own address, so bluetoothctl looks at BT_ADAPTER and not just the default one
-adapter_addr() { cat "/sys/class/bluetooth/$BT_ADAPTER/address" 2>/dev/null || true; }
+adapter_addr() { find_adapter | cut -d' ' -f2 || true; }
 onoff() { on "$1" && echo on || echo off; }
 # Same fallback as the bridge: MQTT_HOST, else the host in HA_API_URL, else homeassistant.local
 mqtt_host() {

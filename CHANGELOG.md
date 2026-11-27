@@ -4,6 +4,12 @@ Newest first.
 
 ## Unreleased
 
+- `BT_ADAPTER` can now be the adapter's address (`AA:BB:CC:DD:EE:FF`) as well as a name like `hci0`.
+  Linux can renumber adapters after a replug, a USB drop or a reboot; an address keeps pointing at the
+  same one. The installer and `jvc2mqtt-check` also find the adapter on kernels where they wrongly
+  reported none.
+  After merging: on the Odroid, update the checkout and run `jvc2mqtt-install`. With two adapters
+  plugged in, set `BT_ADAPTER` to the address of the one paired with the radio.
 - Fix: the bridge now really uses `BT_ADAPTER`. It read the adapter's address from a file some kernels
   (including the Odroid's) don't have, then used whichever adapter Linux picked; with a second adapter
   plugged in, the controls went through the wrong one. If the adapter is missing it now says so and waits.

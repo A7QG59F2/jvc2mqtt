@@ -15,7 +15,9 @@
 JVC_MAC=""
 # RFCOMM channel of the JVC Remote (SPP) service. Found with jvc-probe.py scan/listen.
 JVC_CHANNEL="16"
-# Bluetooth adapter that talks to the radio (ls /sys/class/bluetooth). Any Linux
+# Bluetooth adapter that talks to the radio: a name (ls /sys/class/bluetooth) or its
+# address (bluetoothctl list). With more than one adapter use the address: the
+# numbers can change on a replug or reboot. Pair the radio with that adapter. Any Linux
 # box with Bluetooth in range of the radio works; it doesn't have to be an Odroid.
 BT_ADAPTER="hci0"
 
