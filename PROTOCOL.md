@@ -24,8 +24,11 @@ Values marked *(unconfirmed)* were seen only once or are guesses.
 | len | payload length (one byte) |
 | crc | **CRC-16/ARC** (poly 0x8005 reflected = 0xA001, init 0, no xorout) over `0b` … end of payload, **big-endian** |
 
-**Escaping:** inside a frame (including the CRC), `7e` → `7d 5e` and `7d` → `7d 5d`
-(HDLC style, XOR 0x20). The CRC is computed on the unescaped bytes.
+**Escaping:** inside a frame (including the CRC), `7c` → `7d 5c`, `7d` → `7d 5d` and
+`7e` → `7d 5e` (HDLC style, XOR 0x20). The CRC is computed on the unescaped bytes.
+All three matter: a raw `7c` ends the frame early. Seen on 2026-11-27: the radio sends `7d 5c`;
+an ACK for its seq `7c` sent unescaped was ignored, so the radio repeated that frame every 2 s and
+dropped the link after about 20 s.
 
 **ACKs:** every data frame is acknowledged by the receiver of it: same dst/src/grp/cmd/seq,
 ack = `01`, len = `01`, payload `00`. Note the ACK keeps the **original** src/dst order
