@@ -333,12 +333,29 @@ def main():
     idle_text = (conf.get("RADIO_IDLE_TEXT") or "").strip()
     log(f"While stopped the radio is told: {IDLE_STATUSES[idle]}" + (f", \"{idle_text}\"" if idle_text else ""))
     player = Player(bus, HomeAssistant(base, token, entity), IDLE_STATUSES[idle], idle_text)
-    adapter_path = f"/org/bluez/{adapter}"
-    registered = {"ok": False, "timer": None}
+    registered = {"ok": False, "timer": None, "path": None, "missing": False}
+
+    def find_adapter():
+        """D-Bus path of BT_ADAPTER (a name or the adapter's address), or None."""
+        manager = dbus.Interface(bus.get_object("org.bluez", "/"), "org.freedesktop.DBus.ObjectManager")
+        for path, interfaces in manager.GetManagedObjects().items():
+            props = interfaces.get("org.bluez.Adapter1")
+            if props is not None and "org.bluez.Media1" in interfaces and (
+                    str(path) == f"/org/bluez/{adapter}"
+                    or str(props.get("Address", "")).upper() == adapter.upper()):
+                return str(path)
+        return None
 
     def register():
         try:
-            media = dbus.Interface(bus.get_object("org.bluez", adapter_path), "org.bluez.Media1")
+            path = find_adapter()
+            if not path:
+                if not registered["missing"]:
+                    log(f"Bluetooth adapter {adapter} not found; waiting for it")
+                    registered["missing"] = True
+                return True
+            registered["missing"], registered["path"] = False, path
+            media = dbus.Interface(bus.get_object("org.bluez", path), "org.bluez.Media1")
             media.RegisterPlayer(dbus.ObjectPath(PLAYER_PATH), player.props)
             registered["ok"] = True
             log("Registered with BlueZ as the radio's media player")
@@ -370,13 +387,14 @@ def main():
 
     def interfaces_added(path, interfaces):
         # the adapter came back (replugged, driver reloaded): BlueZ forgot our registration
-        if str(path) == adapter_path and "org.bluez.Media1" in interfaces:
+        # any adapter may be ours under a new number; register() checks which one it is
+        if not registered["ok"] and "org.bluez.Media1" in interfaces:
             register_soon()
 
     def interfaces_removed(path, interfaces):
-        if str(path) == adapter_path and "org.bluez.Media1" in interfaces:
+        if str(path) == registered["path"] and "org.bluez.Media1" in interfaces:
             log(f"Bluetooth adapter {adapter} went away; will register again when it's back")
-            registered["ok"] = False
+            registered["ok"], registered["path"] = False, None
             stop_retrying()
 
     for signal_name, handler in (("InterfacesAdded", interfaces_added),

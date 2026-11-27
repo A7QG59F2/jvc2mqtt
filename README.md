@@ -151,7 +151,7 @@ Skips at the start of playback are most likely Squeezelite underruns while the A
 |---|---|---|
 | `JVC_MAC` | empty | The radio's Bluetooth address (asked by `--configure`) |
 | `JVC_CHANNEL` | `16` | RFCOMM channel of the JVC Remote (SPP) service |
-| `BT_ADAPTER` | `hci0` | Bluetooth adapter that talks to the radio |
+| `BT_ADAPTER` | `hci0` | Bluetooth adapter that talks to the radio: its name or its address (`bluetoothctl list`). Use the address if there is more than one adapter, since the numbers can change |
 | `ENABLE_RADIO_AUDIO` | `1` | Music Assistant player that plays through the radio |
 | `RADIO_AUDIO_NAME` | `Car-Radio` | Player name in Music Assistant |
 | `RADIO_AUDIO_SERVER` | empty (auto) | Music Assistant host, if auto-discovery fails |
