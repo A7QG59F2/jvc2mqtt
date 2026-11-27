@@ -36,7 +36,7 @@ def build_frame(src, dst, grp, cmd, seq, payload=b"", ack=False):
     body += crc16_arc(body).to_bytes(2, "big")
     out = bytearray([0x7E])
     for b in body:
-        out += bytes([0x7D, b ^ 0x20]) if b in (0x7D, 0x7E) else bytes([b])
+        out += bytes([0x7D, b ^ 0x20]) if b in (0x7C, 0x7D, 0x7E) else bytes([b])
     out.append(0x7C)
     return bytes(out)
 
